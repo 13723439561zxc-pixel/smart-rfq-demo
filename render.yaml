@@ -12,6 +12,12 @@ services:
         value: "0.0.0.0"
       - key: NODE_ENV
         value: production
+      - key: SUPABASE_URL
+        value: ""
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        value: ""
+      - key: SUPABASE_RFQ_TABLE
+        value: rfqs
       - key: CORS_ORIGINS
         value: https://RENDER_SERVICE_NAME.onrender.com
       - key: SECURITY_HEADERS_ENABLED
