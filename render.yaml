@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: smart-rfq-demo
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: pnpm install
+    startCommand: pnpm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: HOST
+        value: "0.0.0.0"
+      - key: NODE_ENV
+        value: production
+      - key: CORS_ORIGINS
+        value: https://RENDER_SERVICE_NAME.onrender.com
+      - key: SECURITY_HEADERS_ENABLED
+        value: "true"

@@ -1,0 +1,13 @@
+{
+  "name": "smart-rfq-demo",
+  "version": "1.0.0",
+  "description": "Smart RFQ demo with backend persistence and notification",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node tests/rfq-api.test.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.6"
+  }
+}

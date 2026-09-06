@@ -1,0 +1,1 @@
+{"inquiryId":"RFQ-20260905-2C6B10","createdAt":"2026-09-05T06:25:34.411Z","status":"failed","connected":true,"message":"邮件发送失败：questions.map is not a function or its return value is not iterable","providerId":null}
