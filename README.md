@@ -1,6 +1,6 @@
 # Smart RFQ Demo (V1)
 
-本项目保留现有英文页面，不重做 UI，不做 AI，不做后台管理，不改 Avoro。
+本项目包含英文展示网站、RFQ 提交接口和一个受保护的轻量 RFQ 管理页面。不做 AI，不改 Avoro。
 
 目标（当前阶段）
 
@@ -37,6 +37,9 @@ SUPABASE_RFQ_TABLE=rfqs
 RESEND_API_KEY=
 RESEND_FROM=
 RESEND_TO=
+
+ADMIN_USERNAME=
+ADMIN_PASSWORD=
 ```
 
 说明：
@@ -44,6 +47,15 @@ RESEND_TO=
 - `SUPABASE_SERVICE_ROLE_KEY` 和 `RESEND_API_KEY` 只在服务端读取；前端不会拿到这些值。
 - `RESEND_TO` 是通知收件人邮箱（可先填你自己的测试邮箱）。
 - 未填写完整时提交后返回 `notification.status = not_configured`，RFQ 仍会保存。
+- `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 只在服务端使用，用于保护 `/admin` 和管理接口。请使用独立的长密码，不要提交到 Git。
+
+## RFQ 管理页面
+
+- 地址：`/admin`
+- 浏览器会要求输入 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
+- 页面支持查看 `rfqs` 表、按状态筛选，以及把状态更新为 `new / contacted / quoted / won / lost`。
+- 所有读取和修改操作都经过服务端认证；Supabase service role key 不会发送给浏览器。
+- 公网部署时必须在 Render 的服务端环境变量中设置管理账号和密码。
 
 ## Supabase（免费方案）
 
@@ -191,7 +203,9 @@ pnpm test
 - `SUPABASE_RFQ_TABLE`（默认 `rfqs`）
 - `RESEND_API_KEY`
 - `RESEND_FROM`
-- `RESEND_TO`
+  - `RESEND_TO`
+  - `ADMIN_USERNAME`
+  - `ADMIN_PASSWORD`
 - `CORS_ORIGINS`（你将访问的公网域名，例如 `https://your-demo.onrender.com`）
 - `SECURITY_HEADERS_ENABLED`（可选，默认 `true`）
 

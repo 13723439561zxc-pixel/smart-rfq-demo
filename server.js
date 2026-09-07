@@ -12,6 +12,8 @@ try {
 }
 
 const ROOT_DIR = path.resolve(__dirname);
+const RFQ_FIELDS = 'id,created_at,name,company,email,phone_or_whatsapp,country,product,quantity,specifications,notes,status';
+const RFQ_STATUSES = new Set(['new', 'contacted', 'quoted', 'won', 'lost']);
 
 function parseEnvFile(filePath) {
   if (!fse.existsSync(filePath)) return {};
@@ -49,6 +51,7 @@ function buildConfig(overrides = {}) {
     port: parseIntFallback(merged.PORT, 3000),
     host: merged.HOST || (isProd ? '0.0.0.0' : '127.0.0.1'),
     uiPath: path.join(ROOT_DIR, 'smart-rfq-visual-demo.html'),
+    adminUiPath: path.join(ROOT_DIR, 'admin.html'),
     maxPayloadBytes: parseIntFallback(merged.RFQ_MAX_PAYLOAD_BYTES, 50000),
     supabaseUrl: merged.supabaseUrl || merged.SUPABASE_URL || '',
     supabaseServiceRoleKey: merged.supabaseServiceRoleKey || merged.SUPABASE_SERVICE_ROLE_KEY || '',
@@ -56,6 +59,8 @@ function buildConfig(overrides = {}) {
     resendApiKey: merged.resendApiKey || merged.RESEND_API_KEY || '',
     resendFrom: merged.resendFrom || merged.RESEND_FROM || '',
     resendTo: merged.resendTo || merged.RESEND_TO || '',
+    adminUsername: merged.adminUsername || merged.ADMIN_USERNAME || '',
+    adminPassword: merged.adminPassword || merged.ADMIN_PASSWORD || '',
     corsOrigins: parseList(merged.CORS_ORIGINS || merged.CORS_ALLOW_ORIGINS || merged.ALLOWED_ORIGINS),
     allowedDevOrigin: merged.CORS_ALLOW_DEV_ORIGIN === '1' || merged.CORS_ALLOW_DEV_ORIGIN === 'true',
     securityHeadersEnabled: merged.SECURITY_HEADERS_ENABLED !== '0',
@@ -86,8 +91,8 @@ function setCorsHeaders(req, res, config) {
   }
 
   res.setHeader('Access-Control-Allow-Origin', allowOrigin);
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Max-Age', '86400');
 }
@@ -106,6 +111,57 @@ function sendJson(res, statusCode, payload) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Content-Length', Buffer.byteLength(body));
   res.end(body);
+}
+
+function safeEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left), 'utf8');
+  const rightBuffer = Buffer.from(String(right), 'utf8');
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function isAdminConfigured(config) {
+  return Boolean(config.adminUsername && config.adminPassword);
+}
+
+function isAdminAuthorized(req, config) {
+  if (!isAdminConfigured(config)) return false;
+  const authorization = String(req.headers.authorization || '');
+  if (!authorization.startsWith('Basic ')) return false;
+
+  let decoded = '';
+  try {
+    decoded = Buffer.from(authorization.slice(6), 'base64').toString('utf8');
+  } catch {
+    return false;
+  }
+
+  const separator = decoded.indexOf(':');
+  if (separator < 0) return false;
+  const username = decoded.slice(0, separator);
+  const password = decoded.slice(separator + 1);
+  return safeEqual(username, config.adminUsername) && safeEqual(password, config.adminPassword);
+}
+
+function requireAdmin(req, res, config) {
+  if (!isAdminConfigured(config)) {
+    sendJson(res, 503, {
+      success: false,
+      message: 'Admin access is not configured.'
+    });
+    return false;
+  }
+
+  if (!isAdminAuthorized(req, config)) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="RFQ Admin", charset="UTF-8"');
+    sendJson(res, 401, {
+      success: false,
+      message: 'Authentication required.'
+    });
+    return false;
+  }
+
+  return true;
 }
 
 function readBody(req, maxBytes) {
@@ -239,6 +295,30 @@ function buildDatabaseService(config) {
         throw new Error(error.message || '数据库保存失败');
       }
       return true;
+    },
+    async listInquiries(status = '') {
+      let query = client
+        .from(config.databaseTable)
+        .select(RFQ_FIELDS)
+        .order('created_at', { ascending: false });
+      if (status) query = query.eq('status', status);
+      const { data, error } = await query;
+      if (error) {
+        throw new Error(error.message || 'RFQ list query failed');
+      }
+      return data || [];
+    },
+    async updateInquiryStatus(id, status) {
+      const { data, error } = await client
+        .from(config.databaseTable)
+        .update({ status })
+        .eq('id', id)
+        .select(RFQ_FIELDS)
+        .maybeSingle();
+      if (error) {
+        throw new Error(error.message || 'RFQ status update failed');
+      }
+      return data || null;
     }
   };
 }
@@ -514,6 +594,75 @@ async function handleApiRfq(req, res, config) {
   });
 }
 
+async function handleAdminList(req, res, config, requestUrl) {
+  const status = normalize(requestUrl.searchParams.get('status'));
+  if (status && !RFQ_STATUSES.has(status)) {
+    return sendJson(res, 400, {
+      success: false,
+      message: 'Invalid status filter.'
+    });
+  }
+
+  try {
+    const rows = await config.databaseService.listInquiries(status);
+    return sendJson(res, 200, {
+      success: true,
+      data: { rfqs: rows }
+    });
+  } catch (error) {
+    console.error('RFQ list query failed:', normalizeErrorMessage(error), 'table=', config.databaseTable);
+    return sendJson(res, 500, {
+      success: false,
+      message: 'Unable to load RFQs.'
+    });
+  }
+}
+
+async function handleAdminStatusUpdate(req, res, config, id) {
+  let rawBody;
+  try {
+    rawBody = await readBody(req, config.maxPayloadBytes);
+  } catch (error) {
+    const statusCode = error.message === 'payload_too_large' ? 413 : 400;
+    return sendJson(res, statusCode, {
+      success: false,
+      message: statusCode === 413 ? 'Request body is too large.' : 'Unable to read request.'
+    });
+  }
+
+  let payload = {};
+  try {
+    payload = JSON.parse(rawBody || '{}');
+  } catch {
+    return sendJson(res, 400, { success: false, message: 'Invalid JSON.' });
+  }
+
+  const status = normalize(payload.status);
+  if (!RFQ_STATUSES.has(status)) {
+    return sendJson(res, 400, {
+      success: false,
+      message: 'Status must be new, contacted, quoted, won, or lost.'
+    });
+  }
+
+  try {
+    const row = await config.databaseService.updateInquiryStatus(id, status);
+    if (!row) {
+      return sendJson(res, 404, { success: false, message: 'RFQ not found.' });
+    }
+    return sendJson(res, 200, {
+      success: true,
+      data: { rfq: row }
+    });
+  } catch (error) {
+    console.error('RFQ status update failed:', normalizeErrorMessage(error), 'table=', config.databaseTable);
+    return sendJson(res, 500, {
+      success: false,
+      message: 'Unable to update RFQ status.'
+    });
+  }
+}
+
 async function serveStatic(res, filePath) {
   try {
     const content = await fs.readFile(filePath, 'utf8');
@@ -577,7 +726,8 @@ function createServer(overrides = {}) {
         return;
       }
 
-      const pathname = getPath(req.url || '');
+      const requestUrl = new URL(req.url || '', 'http://localhost');
+      const pathname = requestUrl.pathname;
       if (req.method === 'GET' && pathname === '/api/health') {
         const health = {
           ok: true,
@@ -594,6 +744,46 @@ function createServer(overrides = {}) {
           });
         }
         return handleApiRfq(req, res, serverConfig);
+      }
+
+      if (pathname === '/admin' || pathname === '/admin.html') {
+        if (!requireAdmin(req, res, serverConfig)) return;
+        if (req.method === 'GET') {
+          res.setHeader('Cache-Control', 'no-store');
+          return serveStatic(res, serverConfig.adminUiPath);
+        }
+        return sendJson(res, 405, { message: 'Method Not Allowed' });
+      }
+
+      if (pathname === '/api/admin/rfqs') {
+        if (!requireAdmin(req, res, serverConfig)) return;
+        res.setHeader('Cache-Control', 'no-store');
+        if (!serverConfig.databaseService || typeof serverConfig.databaseService.listInquiries !== 'function') {
+          return sendJson(res, 503, { success: false, message: 'Database is not available.' });
+        }
+        if (req.method === 'GET') {
+          return handleAdminList(req, res, serverConfig, requestUrl);
+        }
+        return sendJson(res, 405, { message: 'Method Not Allowed' });
+      }
+
+      const adminStatusMatch = pathname.match(/^\/api\/admin\/rfqs\/([^/]+)\/status$/);
+      if (adminStatusMatch) {
+        if (!requireAdmin(req, res, serverConfig)) return;
+        res.setHeader('Cache-Control', 'no-store');
+        if (!serverConfig.databaseService || typeof serverConfig.databaseService.updateInquiryStatus !== 'function') {
+          return sendJson(res, 503, { success: false, message: 'Database is not available.' });
+        }
+        if (req.method !== 'PATCH') {
+          return sendJson(res, 405, { message: 'Method Not Allowed' });
+        }
+        let id = '';
+        try {
+          id = decodeURIComponent(adminStatusMatch[1]);
+        } catch {
+          return sendJson(res, 400, { success: false, message: 'Invalid RFQ ID.' });
+        }
+        return handleAdminStatusUpdate(req, res, serverConfig, id);
       }
 
       if (req.method === 'GET' && (pathname === '/' || pathname === '/smart-rfq-visual-demo.html')) {

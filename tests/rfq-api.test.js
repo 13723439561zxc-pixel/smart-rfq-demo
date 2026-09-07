@@ -1,8 +1,8 @@
 const assert = require('node:assert/strict');
 const { createServer } = require('../server');
 
-function createMockDatabase() {
-  const rows = [];
+function createMockDatabase(initialRows = []) {
+  const rows = initialRows.map((row) => ({ ...row }));
   return {
     rows,
     async ping() {
@@ -10,6 +10,17 @@ function createMockDatabase() {
     },
     async saveInquiry(row) {
       rows.push(row);
+    },
+    async listInquiries(status = '') {
+      return rows
+        .filter((row) => !status || row.status === status)
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
+    },
+    async updateInquiryStatus(id, status) {
+      const row = rows.find((item) => item.id === id);
+      if (!row) return null;
+      row.status = status;
+      return { ...row };
     }
   };
 }
@@ -59,6 +70,10 @@ function buildPayload(overrides = {}) {
   };
 }
 
+function adminAuthorization(username = 'rfq-admin', password = 'test-password') {
+  return `Basic ${Buffer.from(`${username}:${password}`, 'utf8').toString('base64')}`;
+}
+
 async function submitRfq(base, overrides = {}) {
   const payload = buildPayload(overrides);
   const response = await fetch(`${base}/api/rfq`, {
@@ -81,7 +96,9 @@ async function runCase(title, options) {
     supabaseServiceRoleKey: options.supabaseServiceRoleKey,
     RESEND_API_KEY: options.resendApiKey,
     RESEND_FROM: options.resendFrom,
-    RESEND_TO: options.resendTo
+    RESEND_TO: options.resendTo,
+    ADMIN_USERNAME: options.adminUsername || 'rfq-admin',
+    ADMIN_PASSWORD: options.adminPassword || 'test-password'
   });
 
   await new Promise((resolve, reject) => {
@@ -191,7 +208,67 @@ async function runCase(title, options) {
     }
   });
 
-  console.log('测试通过：Resend mock 成功、数据库失败、未配置邮件、邮件失败仍保存、参数错误');
+  await runCase('RFQ 管理接口拒绝未认证访问', {
+    createDb: () => createMockDatabase(),
+    testFn: async ({ base }) => {
+      const response = await fetch(`${base}/api/admin/rfqs`);
+      const body = await response.json();
+      assert.equal(response.status, 401);
+      assert.equal(body.success, false);
+      assert.equal(response.headers.get('www-authenticate').includes('RFQ Admin'), true);
+
+      const pageResponse = await fetch(`${base}/admin`, {
+        headers: { Authorization: adminAuthorization() }
+      });
+      const page = await pageResponse.text();
+      assert.equal(pageResponse.status, 200);
+      assert.equal(page.includes('<h1>RFQ Management</h1>'), true);
+    }
+  });
+
+  const adminRows = [
+    {
+      id: 'RFQ-20260907-AAAAAA', created_at: '2026-09-07T09:00:00.000Z', name: 'New Lead', company: 'Alpha',
+      email: 'new@example.com', phone_or_whatsapp: '', country: 'US', product: 'CNC Milling', quantity: '10',
+      specifications: '100 mm', notes: '', status: 'new'
+    },
+    {
+      id: 'RFQ-20260906-BBBBBB', created_at: '2026-09-06T09:00:00.000Z', name: 'Quoted Lead', company: 'Beta',
+      email: 'quoted@example.com', phone_or_whatsapp: '', country: 'US', product: 'CNC Turning', quantity: '5',
+      specifications: '50 mm', notes: '', status: 'quoted'
+    }
+  ];
+  await runCase('RFQ 管理接口支持筛选和更新状态', {
+    createDb: () => createMockDatabase(adminRows),
+    testFn: async ({ base, dbRows }) => {
+      const headers = { Authorization: adminAuthorization() };
+      const listResponse = await fetch(`${base}/api/admin/rfqs?status=new`, { headers });
+      const listBody = await listResponse.json();
+      assert.equal(listResponse.status, 200);
+      assert.equal(listBody.data.rfqs.length, 1);
+      assert.equal(listBody.data.rfqs[0].id, 'RFQ-20260907-AAAAAA');
+
+      const updateResponse = await fetch(`${base}/api/admin/rfqs/RFQ-20260907-AAAAAA/status`, {
+        method: 'PATCH',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'contacted' })
+      });
+      const updateBody = await updateResponse.json();
+      assert.equal(updateResponse.status, 200);
+      assert.equal(updateBody.data.rfq.status, 'contacted');
+      assert.equal(dbRows[0].status, 'contacted');
+
+      const invalidResponse = await fetch(`${base}/api/admin/rfqs/RFQ-20260907-AAAAAA/status`, {
+        method: 'PATCH',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'deleted' })
+      });
+      assert.equal(invalidResponse.status, 400);
+      assert.equal(dbRows[0].status, 'contacted');
+    }
+  });
+
+  console.log('测试通过：RFQ 保存与通知、参数校验、管理后台认证、状态筛选与更新');
 })().catch((error) => {
   console.error('测试失败:', error.message);
   process.exit(1);

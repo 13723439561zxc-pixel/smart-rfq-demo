@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Apex Precision Demo | CNC RFQ Request</title>
+  <title>Apex Precision | CNC Machining & RFQ</title>
   <style>
     :root {
       --bg: #f5f8fc;
@@ -379,16 +379,6 @@
     .request-side li { margin-bottom: 8px; }
     .request-side p { color: var(--muted); font-size: 14px; }
 
-    .demo-note {
-      margin-top: 10px;
-      color: #4a6281;
-      font-size: 12px;
-      padding: 10px;
-      border-left: 3px solid #a5beea;
-      background: #f2f7ff;
-      border-radius: 10px;
-    }
-
     .toast {
       position: fixed;
       left: 50%;
@@ -450,7 +440,7 @@
       <section class="section" id="request-a-quote"></section>
     </main>
 
-    <footer>Sales-ready demo page for RFQ collection. No AI pricing, no client portal, no payment flow.</footer>
+    <footer>Apex Precision is a fictional company presented for demonstration purposes.</footer>
   </div>
 
   <div class="toast" id="toast">Saved</div>
@@ -476,7 +466,7 @@
         hero: {
           eyebrow: 'Modern CNC Manufacturing RFQ Flow',
           title: 'From Inquiry to Quotation Follow-up, Clearly in One Screen',
-          description: 'A lightweight sales page style demo for CNC manufacturers. Potential buyers can submit part requirements, and the team receives complete lead information in a consistent format.',
+          description: 'A focused manufacturing website where buyers can share part requirements and receive a clear reference number for every request.',
           ctaPrimary: 'Request a Quote',
           ctaSecondary: 'See Capabilities',
           visualLabel: 'CNC machining and fabrication line',
@@ -650,16 +640,16 @@
         <div class="section-head">
           <div>
             <h2>About</h2>
-            <p>This page is an intentionally educational sales demo. Company story and operational claims are illustrative only.</p>
+            <p>Apex Precision is a fictional CNC manufacturing brand created to demonstrate a clear, professional RFQ experience.</p>
           </div>
         </div>
         <div class="about-grid">
           <article class="about-card">
-            <h3>Purpose of this site</h3>
-            <p>Help clients understand that a clean industrial RFQ page can be built from one shared page structure.</p>
+            <h3>Built around buyer needs</h3>
+            <p>The site brings capabilities, process information and a structured quote request into one focused experience.</p>
           </article>
           <article class="about-card">
-            <h3>What is real in this demo</h3>
+            <h3>Connected RFQ workflow</h3>
             <ul>
               <li>Form submits to a real RFQ endpoint.</li>
               <li>RFQ ID appears after submit.</li>
@@ -668,8 +658,8 @@
             </ul>
           </article>
           <article class="about-card">
-            <h3>Brand placeholder</h3>
-            <p>Use this demo for internal demo use, then replace text and colors for a target customer brand.</p>
+            <h3>Fictional brand disclosure</h3>
+            <p>No company history, certification, customer, address or production claim on this site represents a real business.</p>
           </article>
           <article class="about-card">
             <h3>Contact label</h3>
@@ -723,7 +713,7 @@
         <div class="section-head">
           <div>
             <h2>Request a Quote</h2>
-            <p>Submit one inquiry with structured CNC fields used by real sales workflows.</p>
+            <p>Share your CNC project requirements and receive a reference number for follow-up.</p>
           </div>
         </div>
         <div class="request-grid">
@@ -736,10 +726,6 @@
             </label>
             <button type="submit" class="submit-btn" id="submitBtn">Submit RFQ</button>
             <div id="submitStatus" class="status-box"></div>
-            <div style="margin-top:10px">
-              <button type="button" class="btn secondary" id="sampleBtn">Fill with sample</button>
-            </div>
-            <p class=\"demo-note\">Email notifications may return not configured / failed in the demo. RFQ is still saved successfully.</p>
           </form>
           <aside class="request-side">
             <h3>After Submission</h3>
@@ -748,7 +734,7 @@
               <li>Team receives standard lead payload.</li>
               <li>Manual follow-up keeps pricing and lead-time control.</li>
             </ul>
-            <p>Demo only. No payments, no AI auto-quote, no log-in and no admin panel.</p>
+            <p>Keep the RFQ reference number for any follow-up correspondence.</p>
           </aside>
         </div>
       `;
@@ -759,7 +745,6 @@
         formFields.appendChild(item.label);
       });
 
-      section.querySelector('#sampleBtn').addEventListener('click', fillSample);
       section.querySelector('#rfqForm').addEventListener('submit', handleSubmit);
     }
 
@@ -856,15 +841,9 @@
           return;
         }
 
-        const statusValue = result?.data?.notification?.status || 'unknown';
         const rfqId = result?.data?.id || 'N/A';
-        let extra = '';
-        if (statusValue === 'sent') extra = 'Notification sent.';
-        if (statusValue === 'not_configured') extra = 'Notification is not configured.';
-        if (statusValue === 'failed') extra = 'Notification failed after saving.';
-
-        showStatus(`Quote saved successfully. RFQ ID: ${rfqId}. ${extra}`, 'success');
-        showToast(`Submitted: ${rfqId}`);
+        showStatus(`Thank you. Your request has been received. Your RFQ reference is ${rfqId}. Please keep this number for follow-up.`, 'success');
+        showToast(`RFQ received: ${rfqId}`);
         form.reset();
         document.getElementById('rfq-consent').checked = false;
       } catch (error) {
@@ -874,32 +853,6 @@
         submitBtn.disabled = false;
         submitBtn.textContent = 'Submit RFQ';
       }
-    }
-
-    function fillSample() {
-      const sample = {
-        name: 'John Smith',
-        company: 'Test Automation',
-        email: 'john.smith@clientexample.com',
-        phone_or_whatsapp: '+1 555-111-2222',
-        country: 'United States',
-        process: 'CNC Milling',
-        material: 'Aluminum 6061',
-        quantity: '3 sets',
-        dimensions: '1800 × 1200 × 2000 mm',
-        tolerance: '±0.10 mm',
-        surfaceFinish: 'Anodized',
-        projectDescription: 'Used for automated equipment. Please send lead time and rough quote.'
-      };
-
-      APP_CONFIG.rfqFields.forEach((field) => {
-        const input = document.getElementById(`field-${field.key}`);
-        if (!input) return;
-        input.value = sample[field.key] || '';
-      });
-
-      document.getElementById('rfq-consent').checked = true;
-      showToast('Sample data loaded');
     }
 
     function renderAll() {
