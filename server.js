@@ -445,6 +445,7 @@ async function handleApiRfq(req, res, config) {
   try {
     await config.databaseService.saveInquiry(buildDbRecord(record));
   } catch (error) {
+    console.error('数据库保存失败:', normalizeErrorMessage(error), 'table=', config.databaseTable);
     return sendJson(res, 500, {
       success: false,
       message: `数据库保存失败：${normalizeErrorMessage(error)}`
