@@ -349,6 +349,7 @@ async function sendMailNotification(config, payload, summary, missingList) {
       providerId: response && response.id ? response.id : null
     };
   } catch (error) {
+    console.error('邮件发送失败:', normalizeErrorMessage(error), 'from=', config.resendFrom, 'to=', config.resendTo);
     return {
       connected: true,
       status: 'failed',
