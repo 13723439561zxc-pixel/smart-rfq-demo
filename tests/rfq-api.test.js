@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { createServer } = require('../server');
+const { createServer, buildDatabaseService } = require('../server');
 
 function createMockDatabase(initialRows = []) {
   const rows = initialRows.map((row) => ({ ...row }));
@@ -116,6 +116,17 @@ async function runCase(title, options) {
 }
 
 (async () => {
+  const productionDatabaseService = buildDatabaseService({
+    databaseService: null,
+    supabaseUrl: 'https://example.supabase.co',
+    supabaseServiceRoleKey: 'test-only-placeholder',
+    databaseTable: 'rfqs'
+  });
+  assert.equal(typeof productionDatabaseService.ping, 'function');
+  assert.equal(typeof productionDatabaseService.saveInquiry, 'function');
+  assert.equal(typeof productionDatabaseService.listInquiries, 'function');
+  assert.equal(typeof productionDatabaseService.updateInquiryStatus, 'function');
+
   const sentRef1 = {};
   await runCase('Resend mock 成功：正常保存并发送邮件', {
     createDb: () => createMockDatabase(),
@@ -138,6 +149,12 @@ async function runCase(title, options) {
       assert.equal(sentRef1.subject, `New RFQ | Machine Guard | 3 sets`);
       assert.equal(sentRef1.to, 'ops@example.test');
       assert.equal(sentRef1.from, 'noreply@resend.dev');
+
+      const healthResponse = await fetch(`${base}/api/health`);
+      const health = await healthResponse.json();
+      assert.equal(healthResponse.status, 200);
+      assert.equal(health.databaseConnected, true);
+      assert.equal(health.emailConnected, true);
     }
   });
 

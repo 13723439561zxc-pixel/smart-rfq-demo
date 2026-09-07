@@ -13,9 +13,9 @@ services:
       - key: NODE_ENV
         value: production
       - key: SUPABASE_URL
-        value: ""
+        sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
-        value: ""
+        sync: false
       - key: SUPABASE_RFQ_TABLE
         value: rfqs
       - key: CORS_ORIGINS

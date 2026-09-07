@@ -66,9 +66,9 @@ function buildConfig(overrides = {}) {
     securityHeadersEnabled: merged.SECURITY_HEADERS_ENABLED !== '0',
     nodeEnv,
     isProd,
-    // For tests
-    databaseService: merged.databaseService || null,
-    emailSender: merged.emailSender || null
+    // Dependency injection is accepted only from code, never from string environment values.
+    databaseService: overrides.databaseService || null,
+    emailSender: overrides.emailSender || null
   };
 }
 
@@ -336,6 +336,32 @@ function normalizeErrorMessage(err) {
 
 function isDatabaseConfigured(config) {
   return !!config.databaseService && Boolean(config.supabaseUrl && config.supabaseServiceRoleKey);
+}
+
+function databaseServiceDetails(config, requiredMethod = '') {
+  return {
+    table: config.databaseTable,
+    supabaseUrlConfigured: Boolean(config.supabaseUrl),
+    serviceRoleKeyConfigured: Boolean(config.supabaseServiceRoleKey),
+    supabaseClientAvailable: Boolean(supabase && supabase.createClient),
+    serviceInitialized: Boolean(config.databaseService),
+    requiredMethod: requiredMethod || null,
+    methodAvailable: requiredMethod
+      ? Boolean(config.databaseService && typeof config.databaseService[requiredMethod] === 'function')
+      : null
+  };
+}
+
+function requireDatabaseMethod(res, config, methodName) {
+  if (config.databaseService && typeof config.databaseService[methodName] === 'function') {
+    return true;
+  }
+  console.error('Database service is unavailable:', databaseServiceDetails(config, methodName));
+  sendJson(res, 503, {
+    success: false,
+    message: 'Database is not available.'
+  });
+  return false;
 }
 
 function buildEmailSender(config) {
@@ -713,6 +739,10 @@ function createServer(overrides = {}) {
     emailSender
   };
 
+  if (!dbService && serverConfig.isProd) {
+    console.error('Database service initialization failed:', databaseServiceDetails(serverConfig));
+  }
+
   const server = http.createServer(async (req, res) => {
     try {
       setCorsHeaders(req, res, serverConfig);
@@ -737,12 +767,7 @@ function createServer(overrides = {}) {
       }
 
       if (req.method === 'POST' && pathname === '/api/rfq') {
-        if (!serverConfig.databaseService) {
-          return sendJson(res, 500, {
-            success: false,
-            message: '数据库未连接：请先配置 SUPABASE_URL 与 SUPABASE_SERVICE_ROLE_KEY。'
-          });
-        }
+        if (!requireDatabaseMethod(res, serverConfig, 'saveInquiry')) return;
         return handleApiRfq(req, res, serverConfig);
       }
 
@@ -758,9 +783,7 @@ function createServer(overrides = {}) {
       if (pathname === '/api/admin/rfqs') {
         if (!requireAdmin(req, res, serverConfig)) return;
         res.setHeader('Cache-Control', 'no-store');
-        if (!serverConfig.databaseService || typeof serverConfig.databaseService.listInquiries !== 'function') {
-          return sendJson(res, 503, { success: false, message: 'Database is not available.' });
-        }
+        if (!requireDatabaseMethod(res, serverConfig, 'listInquiries')) return;
         if (req.method === 'GET') {
           return handleAdminList(req, res, serverConfig, requestUrl);
         }
@@ -771,9 +794,7 @@ function createServer(overrides = {}) {
       if (adminStatusMatch) {
         if (!requireAdmin(req, res, serverConfig)) return;
         res.setHeader('Cache-Control', 'no-store');
-        if (!serverConfig.databaseService || typeof serverConfig.databaseService.updateInquiryStatus !== 'function') {
-          return sendJson(res, 503, { success: false, message: 'Database is not available.' });
-        }
+        if (!requireDatabaseMethod(res, serverConfig, 'updateInquiryStatus')) return;
         if (req.method !== 'PATCH') {
           return sendJson(res, 405, { message: 'Method Not Allowed' });
         }
