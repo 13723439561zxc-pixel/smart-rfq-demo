@@ -18,6 +18,12 @@ services:
         sync: false
       - key: SUPABASE_RFQ_TABLE
         value: rfqs
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM
+        sync: false
+      - key: RESEND_TO
+        sync: false
       - key: CORS_ORIGINS
         value: https://RENDER_SERVICE_NAME.onrender.com
       - key: SECURITY_HEADERS_ENABLED

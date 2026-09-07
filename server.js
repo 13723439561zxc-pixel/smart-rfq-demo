@@ -13,7 +13,11 @@ try {
 
 const ROOT_DIR = path.resolve(__dirname);
 const RFQ_FIELDS = 'id,created_at,name,company,email,phone_or_whatsapp,country,product,quantity,specifications,notes,status';
-const RFQ_STATUSES = new Set(['new', 'contacted', 'quoted', 'won', 'lost']);
+const RFQ_STATUS_VALUES = ['new', 'contacted', 'quoted', 'won', 'lost'];
+const RFQ_STATUSES = new Set(RFQ_STATUS_VALUES);
+const RFQ_SEARCH_FIELDS = ['id', 'name', 'company', 'email', 'country', 'product'];
+const DEFAULT_ADMIN_PAGE_SIZE = 20;
+const MAX_ADMIN_PAGE_SIZE = 100;
 
 function parseEnvFile(filePath) {
   if (!fse.existsSync(filePath)) return {};
@@ -192,6 +196,48 @@ function normalize(value, fallback = '') {
   return String(value).trim() || fallback;
 }
 
+function escapePostgrestLikeTerm(value) {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/[%_]/g, (character) => `\\${character}`);
+}
+
+function parseAdminListOptions(searchParams) {
+  const status = normalize(searchParams.get('status'));
+  const search = normalize(searchParams.get('search'));
+  const sort = normalize(searchParams.get('sort'), 'newest');
+  const rawPage = normalize(searchParams.get('page'), '1');
+  const rawPageSize = normalize(searchParams.get('pageSize'), String(DEFAULT_ADMIN_PAGE_SIZE));
+
+  if (status && !RFQ_STATUSES.has(status)) {
+    return { ok: false, message: 'Invalid status filter.' };
+  }
+  if (search.length > 100 || /[\u0000-\u001f\u007f]/.test(search)) {
+    return { ok: false, message: 'Search must be 100 characters or fewer.' };
+  }
+  if (!['newest', 'oldest'].includes(sort)) {
+    return { ok: false, message: 'Sort must be newest or oldest.' };
+  }
+  if (!/^\d+$/.test(rawPage) || !/^\d+$/.test(rawPageSize)) {
+    return { ok: false, message: 'Page and pageSize must be positive integers.' };
+  }
+
+  const page = Number(rawPage);
+  const pageSize = Number(rawPageSize);
+  if (!Number.isSafeInteger(page) || page < 1 || page > 100000) {
+    return { ok: false, message: 'Page is outside the supported range.' };
+  }
+  if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > MAX_ADMIN_PAGE_SIZE) {
+    return { ok: false, message: `pageSize must be between 1 and ${MAX_ADMIN_PAGE_SIZE}.` };
+  }
+
+  return {
+    ok: true,
+    value: { status, search, sort, page, pageSize }
+  };
+}
+
 function validateSubmission(payload) {
   const required = [];
   const errors = [];
@@ -296,17 +342,57 @@ function buildDatabaseService(config) {
       }
       return true;
     },
-    async listInquiries(status = '') {
+    async listInquiries(options = {}) {
+      const {
+        status = '',
+        search = '',
+        sort = 'newest',
+        page = 1,
+        pageSize = DEFAULT_ADMIN_PAGE_SIZE
+      } = options;
+      const from = (page - 1) * pageSize;
+      const to = from + pageSize - 1;
       let query = client
         .from(config.databaseTable)
-        .select(RFQ_FIELDS)
-        .order('created_at', { ascending: false });
+        .select(RFQ_FIELDS, { count: 'exact' })
+        .order('created_at', { ascending: sort === 'oldest' })
+        .order('id', { ascending: sort === 'oldest' })
+        .range(from, to);
       if (status) query = query.eq('status', status);
-      const { data, error } = await query;
+      if (search) {
+        const escaped = escapePostgrestLikeTerm(search);
+        const pattern = `"%${escaped}%"`;
+        query = query.or(RFQ_SEARCH_FIELDS.map((field) => `${field}.ilike.${pattern}`).join(','));
+      }
+
+      const countRows = async (statusValue = '') => {
+        let countQuery = client
+          .from(config.databaseTable)
+          .select('id', { head: true, count: 'exact' });
+        if (statusValue) countQuery = countQuery.eq('status', statusValue);
+        const { count, error } = await countQuery;
+        if (error) throw new Error(error.message || 'RFQ statistics query failed');
+        return count || 0;
+      };
+
+      const [listResult, totalCount, ...statusCounts] = await Promise.all([
+        query,
+        countRows(),
+        ...RFQ_STATUS_VALUES.map((statusValue) => countRows(statusValue))
+      ]);
+      const { data, error, count } = listResult;
       if (error) {
         throw new Error(error.message || 'RFQ list query failed');
       }
-      return data || [];
+      const stats = { total: totalCount };
+      RFQ_STATUS_VALUES.forEach((statusValue, index) => {
+        stats[statusValue] = statusCounts[index];
+      });
+      return {
+        rows: data || [],
+        total: count || 0,
+        stats
+      };
     },
     async updateInquiryStatus(id, status) {
       const { data, error } = await client
@@ -621,19 +707,39 @@ async function handleApiRfq(req, res, config) {
 }
 
 async function handleAdminList(req, res, config, requestUrl) {
-  const status = normalize(requestUrl.searchParams.get('status'));
-  if (status && !RFQ_STATUSES.has(status)) {
+  const parsedOptions = parseAdminListOptions(requestUrl.searchParams);
+  if (!parsedOptions.ok) {
     return sendJson(res, 400, {
       success: false,
-      message: 'Invalid status filter.'
+      message: parsedOptions.message
     });
   }
 
   try {
-    const rows = await config.databaseService.listInquiries(status);
+    const options = parsedOptions.value;
+    const result = await config.databaseService.listInquiries(options);
+    const rows = Array.isArray(result) ? result : result.rows;
+    const total = Array.isArray(result) ? result.length : result.total;
+    const stats = Array.isArray(result)
+      ? { total: result.length, new: 0, contacted: 0, quoted: 0, won: 0, lost: 0 }
+      : result.stats;
     return sendJson(res, 200, {
       success: true,
-      data: { rfqs: rows }
+      data: {
+        rfqs: rows,
+        stats,
+        pagination: {
+          page: options.page,
+          pageSize: options.pageSize,
+          total,
+          hasMore: options.page * options.pageSize < total
+        },
+        query: {
+          status: options.status,
+          search: options.search,
+          sort: options.sort
+        }
+      }
     });
   } catch (error) {
     console.error('RFQ list query failed:', normalizeErrorMessage(error), 'table=', config.databaseTable);

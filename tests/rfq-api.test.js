@@ -11,10 +11,27 @@ function createMockDatabase(initialRows = []) {
     async saveInquiry(row) {
       rows.push(row);
     },
-    async listInquiries(status = '') {
-      return rows
+    async listInquiries(options = {}) {
+      const { status = '', search = '', sort = 'newest', page = 1, pageSize = 20 } = options;
+      const searchValue = search.toLowerCase();
+      const searchFields = ['id', 'name', 'company', 'email', 'country', 'product'];
+      const stats = { total: rows.length, new: 0, contacted: 0, quoted: 0, won: 0, lost: 0 };
+      rows.forEach((row) => {
+        if (Object.hasOwn(stats, row.status)) stats[row.status] += 1;
+      });
+      const filtered = rows
         .filter((row) => !status || row.status === status)
-        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
+        .filter((row) => !searchValue || searchFields.some((field) => String(row[field] || '').toLowerCase().includes(searchValue)))
+        .sort((left, right) => {
+          const comparison = String(left.created_at).localeCompare(String(right.created_at));
+          return sort === 'oldest' ? comparison : -comparison;
+        });
+      const from = (page - 1) * pageSize;
+      return {
+        rows: filtered.slice(from, from + pageSize).map((row) => ({ ...row })),
+        total: filtered.length,
+        stats
+      };
     },
     async updateInquiryStatus(id, status) {
       const row = rows.find((item) => item.id === id);
@@ -32,6 +49,24 @@ function createFailDatabase() {
     },
     async saveInquiry() {
       throw new Error('constraint violation');
+    }
+  };
+}
+
+function createFailAdminDatabase() {
+  return {
+    rows: [],
+    async ping() {
+      return true;
+    },
+    async saveInquiry() {
+      return true;
+    },
+    async listInquiries() {
+      throw new Error('admin query failed');
+    },
+    async updateInquiryStatus() {
+      throw new Error('admin update failed');
     }
   };
 }
@@ -246,24 +281,71 @@ async function runCase(title, options) {
   const adminRows = [
     {
       id: 'RFQ-20260907-AAAAAA', created_at: '2026-09-07T09:00:00.000Z', name: 'New Lead', company: 'Alpha',
-      email: 'new@example.com', phone_or_whatsapp: '', country: 'US', product: 'CNC Milling', quantity: '10',
+      email: 'new@example.com', phone_or_whatsapp: '+1 555 010 1000', country: 'US', product: 'CNC Milling', quantity: '10',
       specifications: '100 mm', notes: '', status: 'new'
     },
     {
       id: 'RFQ-20260906-BBBBBB', created_at: '2026-09-06T09:00:00.000Z', name: 'Quoted Lead', company: 'Beta',
       email: 'quoted@example.com', phone_or_whatsapp: '', country: 'US', product: 'CNC Turning', quantity: '5',
       specifications: '50 mm', notes: '', status: 'quoted'
+    },
+    {
+      id: 'RFQ-20260905-CCCCCC', created_at: '2026-09-05T09:00:00.000Z', name: 'Contacted Lead', company: 'Gamma',
+      email: 'contacted@example.com', phone_or_whatsapp: '', country: 'Canada', product: 'Prototype', quantity: '2',
+      specifications: '25 mm', notes: '', status: 'contacted'
+    },
+    {
+      id: 'RFQ-20260904-DDDDDD', created_at: '2026-09-04T09:00:00.000Z', name: 'Won Lead', company: 'Delta',
+      email: 'won@example.com', phone_or_whatsapp: '', country: 'Germany', product: 'CNC Milling', quantity: '40',
+      specifications: '200 mm', notes: '', status: 'won'
+    },
+    {
+      id: 'RFQ-20260903-EEEEEE', created_at: '2026-09-03T09:00:00.000Z', name: 'Lost Lead', company: 'Epsilon',
+      email: 'lost@example.com', phone_or_whatsapp: '', country: 'France', product: 'CNC Turning', quantity: '12',
+      specifications: '75 mm', notes: '', status: 'lost'
+    },
+    {
+      id: 'RFQ-20260902-FFFFFF', created_at: '2026-09-02T09:00:00.000Z', name: 'Second New Lead', company: 'Zeta',
+      email: 'second-new@example.com', phone_or_whatsapp: '', country: 'Japan', product: 'Small Production', quantity: '100',
+      specifications: '15 mm', notes: '', status: 'new'
     }
   ];
-  await runCase('RFQ 管理接口支持筛选和更新状态', {
+  await runCase('RFQ 管理接口支持读取、统计、筛选、搜索、分页、排序和状态更新', {
     createDb: () => createMockDatabase(adminRows),
     testFn: async ({ base, dbRows }) => {
       const headers = { Authorization: adminAuthorization() };
-      const listResponse = await fetch(`${base}/api/admin/rfqs?status=new`, { headers });
+      const listResponse = await fetch(`${base}/api/admin/rfqs`, { headers });
       const listBody = await listResponse.json();
       assert.equal(listResponse.status, 200);
-      assert.equal(listBody.data.rfqs.length, 1);
+      assert.equal(listBody.data.rfqs.length, 6);
       assert.equal(listBody.data.rfqs[0].id, 'RFQ-20260907-AAAAAA');
+      assert.deepEqual(listBody.data.stats, { total: 6, new: 2, contacted: 1, quoted: 1, won: 1, lost: 1 });
+      assert.deepEqual(listBody.data.pagination, { page: 1, pageSize: 20, total: 6, hasMore: false });
+
+      const filteredResponse = await fetch(`${base}/api/admin/rfqs?status=new&search=Alpha`, { headers });
+      const filteredBody = await filteredResponse.json();
+      assert.equal(filteredResponse.status, 200);
+      assert.equal(filteredBody.data.rfqs.length, 1);
+      assert.equal(filteredBody.data.rfqs[0].id, 'RFQ-20260907-AAAAAA');
+      assert.equal(filteredBody.data.pagination.total, 1);
+
+      for (const search of ['RFQ-20260906-BBBBBB', 'Contacted Lead', 'Delta', 'lost@example.com', 'Japan', 'Prototype']) {
+        const response = await fetch(`${base}/api/admin/rfqs?search=${encodeURIComponent(search)}`, { headers });
+        const body = await response.json();
+        assert.equal(response.status, 200);
+        assert.equal(body.data.rfqs.length, 1);
+      }
+
+      const pageResponse = await fetch(`${base}/api/admin/rfqs?page=2&pageSize=2`, { headers });
+      const pageBody = await pageResponse.json();
+      assert.equal(pageResponse.status, 200);
+      assert.deepEqual(pageBody.data.rfqs.map((row) => row.id), ['RFQ-20260905-CCCCCC', 'RFQ-20260904-DDDDDD']);
+      assert.deepEqual(pageBody.data.pagination, { page: 2, pageSize: 2, total: 6, hasMore: true });
+
+      const oldestResponse = await fetch(`${base}/api/admin/rfqs?sort=oldest&pageSize=2`, { headers });
+      const oldestBody = await oldestResponse.json();
+      assert.equal(oldestResponse.status, 200);
+      assert.deepEqual(oldestBody.data.rfqs.map((row) => row.id), ['RFQ-20260902-FFFFFF', 'RFQ-20260903-EEEEEE']);
 
       const updateResponse = await fetch(`${base}/api/admin/rfqs/RFQ-20260907-AAAAAA/status`, {
         method: 'PATCH',
@@ -282,10 +364,35 @@ async function runCase(title, options) {
       });
       assert.equal(invalidResponse.status, 400);
       assert.equal(dbRows[0].status, 'contacted');
+
+      for (const query of ['status=deleted', 'sort=random', 'page=0', 'pageSize=101', `search=${'x'.repeat(101)}`]) {
+        const response = await fetch(`${base}/api/admin/rfqs?${query}`, { headers });
+        assert.equal(response.status, 400);
+      }
     }
   });
 
-  console.log('测试通过：RFQ 保存与通知、参数校验、管理后台认证、状态筛选与更新');
+  await runCase('RFQ 管理数据库失败返回明确错误', {
+    createDb: () => createFailAdminDatabase(),
+    testFn: async ({ base }) => {
+      const headers = { Authorization: adminAuthorization() };
+      const listResponse = await fetch(`${base}/api/admin/rfqs`, { headers });
+      const listBody = await listResponse.json();
+      assert.equal(listResponse.status, 500);
+      assert.equal(listBody.message, 'Unable to load RFQs.');
+
+      const updateResponse = await fetch(`${base}/api/admin/rfqs/RFQ-20260907-AAAAAA/status`, {
+        method: 'PATCH',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'quoted' })
+      });
+      const updateBody = await updateResponse.json();
+      assert.equal(updateResponse.status, 500);
+      assert.equal(updateBody.message, 'Unable to update RFQ status.');
+    }
+  });
+
+  console.log('测试通过：RFQ/Resend/健康检查、后台认证、统计、筛选、搜索、分页、排序与状态更新');
 })().catch((error) => {
   console.error('测试失败:', error.message);
   process.exit(1);

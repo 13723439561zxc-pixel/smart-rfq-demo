@@ -53,9 +53,12 @@ ADMIN_PASSWORD=
 
 - 地址：`/admin`
 - 浏览器会要求输入 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD`。
-- 页面支持查看 `rfqs` 表、按状态筛选，以及把状态更新为 `new / contacted / quoted / won / lost`。
+- 页面支持 RFQ 统计、搜索、状态筛选、时间排序、每次 20 条加载，以及把状态更新为 `new / contacted / quoted / won / lost`。
+- 卡片默认展示核心信息，展开后查看客户联系方式和完整需求；邮件与 WhatsApp 按钮只打开对应客户端，不会自动发送消息。
 - 所有读取和修改操作都经过服务端认证；Supabase service role key 不会发送给浏览器。
 - 公网部署时必须在 Render 的服务端环境变量中设置管理账号和密码。
+
+受保护的列表接口支持：`status`、`search`、`sort=newest|oldest`、`page` 和 `pageSize`（最大 100）参数。搜索范围为 RFQ ID、姓名、公司、邮箱、国家和产品。
 
 ## Supabase（免费方案）
 
